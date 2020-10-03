@@ -1,6 +1,6 @@
 {
 	"name": "@dockerless/cli",
-	"version": "0.0.1",
+	"version": "1.0.0",
 	"description": "CLI tool for managing Docker applications on AWS",
 	"publishConfig": {
 		"access": "public"
