@@ -1,0 +1,26 @@
+version: '1'
+serviceName: 'Hello'
+containers:
+  redis:
+    containerName: 'redis'
+    dockerFilePath: 'redis/Dockerfile'
+    size: 'xxs'
+    port: 6379
+    portProtocol: 'TCP'
+    desiredInstances: 1
+    networkType: 'private'
+  privateBackend:
+    containerName: 'Private App'
+    dockerFilePath: 'node-app-private/Dockerfile'
+    size: 'xxs'
+    port: 81
+    portProtocol: 'HTTP'
+    desiredInstances: 1
+    networkType: 'private'
+  backend:
+    containerName: 'Express App'
+    dockerFilePath: 'node-app-public/Dockerfile'
+    size: 'xxs'
+    port: 80
+    portProtocol: 'HTTP'
+    desiredInstances: 1

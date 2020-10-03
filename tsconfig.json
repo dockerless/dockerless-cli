@@ -1,0 +1,19 @@
+{
+	"compilerOptions": {
+		"sourceMap": true,
+		"outDir": "./lib",
+		"baseUrl": "src",
+		"esModuleInterop": true,
+		"noImplicitAny": true,
+		"module": "commonjs",
+		"target": "esnext",
+		"jsx": "react",
+		"lib": ["dom", "es2015", "es2017"],
+		"paths": {
+			"@src/*": ["*"],
+			"@utils/*": ["utils/*"],
+			"@modules/*": ["modules/*"]
+		}
+	},
+	"include": ["./src/**/*"]
+}

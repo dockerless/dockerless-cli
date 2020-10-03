@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This stack deploys a Fargate cluster that is in a VPC with both
+  public and private subnets. Containers can be deployed into either
+  the public subnets or the private subnets, and there are two load
+  balancers. One is inside the public subnet, which can be used to
+  send traffic to the containers in the private subnet, and one in
+  the private subnet, which can be used for private internal traffic
+  between internal services.
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: dockerless-cluster
+    Description: The name of the cluster.
+
+  NetworkName:
+    Type: String
+    Default: dockerless
+    Description: The name of the network for service  discovery.
+
+  EnvironmentNameParam:
+    Type: String
+    Default: 'dev'
+    Description: Environment to be used in resource names.
+    AllowedValues:
+      - uat
+      - acc
+      - prod
+      - tst
+      - dev
+
+  VPCStackName:
+    Type: String
+    Description: The name of the parent Dockerless networking stack that was created created. Necessary
+      to locate and reference resources created by that stack.
+
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: 'General'
+        Parameters:
+          - ClusterName
+          - NetworkNamespace
+          - EnvironmentNameParam
+          - VPCStackName
+
+Resources:
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Join ['-', [!Ref 'ClusterName', !Ref 'EnvironmentNameParam']]
+  FargateContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access to the Fargate containers
+      VpcId:
+        Fn::ImportValue:
+          !Join ['-', [!Ref 'VPCStackName', 'Vpc-ref']]
+
+  # Service Discovery
+  PrivateNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: !Join ['-', [!Ref 'NetworkName', 'NameSpace', !Ref 'EnvironmentNameParam']]
+      Vpc:
+        Fn::ImportValue:
+          !Join ['-', [!Ref 'VPCStackName', 'Vpc-ref']]
+
+Outputs:
+  ClusterName:
+    Export:
+      Name: !Sub ${AWS::StackName}-Cluster-Name
+    Value: !Ref 'ECSCluster'
+  FargateContainerSG:
+    Export:
+      Name: !Sub ${AWS::StackName}-Fargate-Container-SG
+    Value: !Ref 'FargateContainerSecurityGroup'
+  PrivateNamespace:
+    Export:
+      Name: !Sub ${AWS::StackName}-Private-Namespace
+    Value: !Ref PrivateNamespace

@@ -1,0 +1,12 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Create an ECR repository
+Parameters:
+  RepositoryName:
+    Type: String
+    Description: The name for the repository
+
+Resources:
+  MyRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref 'RepositoryName'

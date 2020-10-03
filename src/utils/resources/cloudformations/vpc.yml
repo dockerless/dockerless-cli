@@ -1,0 +1,530 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: VPC, Subnets, Internet Gateway, NAT Gateway..
+
+Parameters:
+  BaseNameParam:
+    Type: String
+    Default: 'dockerless'
+    Description: Base name for all resources.
+
+  EnvironmentNameParam:
+    Type: String
+    Default: 'dev'
+    Description: Environment to be used in resource names.
+    AllowedValues:
+      - prod
+      - acc
+      - uat
+      - tst
+      - dev
+
+  VpcCidr:
+    Type: String
+    Default: '10.91.0.0/19'
+    Description: VPC Cidr Block
+
+  VpcNetwork:
+    Type: String
+    Default: '10.91.0.0'
+    Description: VPC Network Address
+
+  VpcNetmask:
+    Type: String
+    Default: '255.255.224.0'
+    Description: VPC Netmask
+
+  # Public cidr blocks
+  SubPubACidr:
+    Type: String
+    Default: '10.91.0.0/24'
+    Description: CidrBlock of Public subnet A
+  SubPubBCidr:
+    Type: String
+    Default: '10.91.1.0/24'
+    Description: CidrBlock of Public subnet B
+
+  # Private cidr blocks
+  SubPrivACidr:
+    Type: String
+    Default: '10.91.4.0/23'
+    Description: CidrBlock of Private subnet A
+  SubPrivBCidr:
+    Type: String
+    Default: '10.91.6.0/23'
+    Description: CidrBlock of Private subnet B
+
+  # Offline cidr blocks
+  SubOfflineACidr:
+    Type: String
+    Default: '10.91.24.0/24'
+    Description: CidrBlock of Offline Subnet A
+  SubOfflineBCidr:
+    Type: String
+    Default: '10.91.25.0/24'
+    Description: CidrBlock of Offline Subnet B
+
+  NATType:
+    Type: String
+    AllowedValues:
+      - 'EC2 NAT Instance'
+      - 'NAT Gateway'
+    Default: 'NAT Gateway'
+    Description: 'What type of NAT to use for private instances to communicate with the internet.
+    A single EC2 instance can be used as a NAT, or you can use the AWS NAT Gateway (managed, scalable, more expensive).
+    Nat Gateway is recommended for production.
+    When NAT Gateway is selected one will be created per subnet. The NAT instance however is shared.'
+
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: 'General'
+        Parameters:
+          - BaseNameParam
+          - EnvironmentNameParam
+      - Label:
+          default: 'Network'
+        Parameters:
+          - VpcCidr
+          - VpcNetwork
+          - VpcNetmask
+          - SubPubACidr
+          - SubPubBCidr
+          - SubPrivACidr
+          - SubPrivBCidr
+          - SubOfflineACidr
+          - SubOfflineBCidr
+    ParameterLabels:
+      BaseNameParam:
+        default: 'Project code'
+      EnvironmentNameParam:
+        default: 'Environment code (dev, test, uat or prd)'
+      VpcCidr:
+        default: 'VPC CIDR Block'
+      VpcNetwork:
+        default: 'VPC Network Address'
+      VpcNetmask:
+        default: 'VPC Netmask'
+      SubPubACidr:
+        default: 'Public Subnet A'
+      SubPubBCidr:
+        default: 'Public Subnet B'
+      SubPrivACidr:
+        default: 'Private Subnet A'
+      SubPrivBCidr:
+        default: 'Private Subnet B'
+      SubOfflineACidr:
+        default: 'Offline ( RDS&etc ) Subnet A'
+      SubOfflineBCidr:
+        default: 'Offline ( RDS&etc ) Subnet B'
+      NATType:
+        default: 'NAT Instance or managed Nat Gateway'
+
+
+Conditions:
+  BuildNATInstance: !Equals [ !Ref NATType, 'EC2 NAT Instance' ]
+  BuildNATGateway: !Equals [ !Ref NATType, 'NAT Gateway' ]
+
+Mappings:
+  #  This is the Amazon Linux 2 AMI.  Adjust these values as needed, they can change a few times per year:
+  AmazonLinuxAMI:
+    us-east-1:
+      AMI: ami-04681a1dbd79675a5    # N Virginia
+    us-east-2:
+      AMI: ami-0cf31d971a3ca20d6    # Ohio
+    us-west-1:
+      AMI: ami-0782017a917e973e7    # N California
+    us-west-2:
+      AMI: ami-6cd6f714             # Oregon
+    eu-west-1:
+      AMI: ami-0bdb1d6c15a40392c    # Ireland
+    eu-central-1:
+      AMI: ami-0f5dbc86dd9cbf7a8    # Frankfurt
+    sa-east-1:
+      AMI: ami-0ad7b0031d41ed4b9    # Sao Paulo
+    ap-southeast-1:
+      AMI: ami-01da99628f381e50a    # Singaport
+    ap-southeast-2:
+      AMI: ami-00e17d1165b9dd3ec    # Sydney
+    ap-northeast-1:
+      AMI: ami-08847abae18baa040    # Tokyo
+
+Resources:
+  Vpc:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      Tags:
+        - Key: 'Name'
+          Value: !Join
+            - '-'
+            - - 'vpc'
+              - !Ref BaseNameParam
+              - !Ref EnvironmentNameParam
+      InstanceTenancy: default
+
+  # Subnets
+
+  # Public Subnet
+  SubPubA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Join [ '', [ !Ref 'AWS::Region', 'a' ] ]
+      CidrBlock:  !Ref SubPubACidr
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'sn', !Ref BaseNameParam, !Ref EnvironmentNameParam, 'pub', 'a' ] ]
+  SubPubB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Join [ '', [ !Ref 'AWS::Region', 'b' ] ]
+      CidrBlock:  !Ref SubPubBCidr
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'sn', !Ref BaseNameParam, !Ref EnvironmentNameParam, 'pub', 'b' ] ]
+  # Private Subnet
+  SubPrivA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Join [ '', [ !Ref 'AWS::Region', 'a' ] ]
+      CidrBlock:  !Ref SubPrivACidr
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'sn', !Ref BaseNameParam, !Ref EnvironmentNameParam, 'priv', 'a' ] ]
+  SubPrivB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Join [ '', [ !Ref 'AWS::Region', 'b' ] ]
+      CidrBlock:  !Ref SubPrivBCidr
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'sn', !Ref BaseNameParam, !Ref EnvironmentNameParam, 'priv', 'b' ] ]
+  # Offline Subnet
+  SubOfflineA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Join [ '', [ !Ref 'AWS::Region', 'a' ] ]
+      CidrBlock:  !Ref SubOfflineACidr
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'sn', !Ref BaseNameParam, !Ref EnvironmentNameParam, 'off', 'a' ] ]
+  SubOfflineB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Join [ '', [ !Ref 'AWS::Region', 'b' ] ]
+      CidrBlock:  !Ref SubOfflineBCidr
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'sn', !Ref BaseNameParam, !Ref EnvironmentNameParam, 'off', 'b' ] ]
+
+
+  # InternetGateway
+  infraInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'igw', !Ref BaseNameParam, !Ref EnvironmentNameParam ] ]
+  infraGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref infraInternetGateway
+
+  # NAT Gateway
+  NatEipA:
+    Type: AWS::EC2::EIP
+    Condition: BuildNATGateway
+  NatEipB:
+    Type: AWS::EC2::EIP
+    Condition: BuildNATGateway
+
+  NatGwA:
+    Type: AWS::EC2::NatGateway
+    Condition: BuildNATGateway
+    Properties:
+      SubnetId: !Ref SubPubA
+      AllocationId: !GetAtt NatEipA.AllocationId
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'ngw', !Ref BaseNameParam, !Ref EnvironmentNameParam, 'pub', 'a' ] ]
+  NatGwB:
+    Type: AWS::EC2::NatGateway
+    Condition: BuildNATGateway
+    Properties:
+      SubnetId: !Ref SubPubB
+      AllocationId: !GetAtt NatEipB.AllocationId
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'ngw', !Ref BaseNameParam, !Ref EnvironmentNameParam, 'pub', 'b' ] ]
+
+
+  # A NAT Instance will be built and used if the user specified an EC2 instance over a managed Gateway.
+  NATInstance:
+    Type: AWS::EC2::Instance
+    Condition: BuildNATInstance
+    DependsOn: PubRoute                                               # Must have route to IGW established.
+    Properties:
+      ImageId: !FindInMap [ AmazonLinuxAMI, !Ref 'AWS::Region', AMI]  # We lookup the AMI from the Region Map
+      InstanceType: t2.nano                                           # Any instance type is fine
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          SubnetId: !Ref SubPubA                                        # Any public subnet is fine
+          AssociatePublicIpAddress: true                                # We will definitely need a public IP address
+          GroupSet: [!Ref NATSecurityGroup]                             # Plug in the security group
+      SourceDestCheck: false                                          # NATs don't work if EC2 tries the match source addresses with destinations.
+      Tags:
+        - Key: Name
+          Value: !Sub NAT-${AWS::StackName}
+      UserData:      #  This code is NAT code.  Look at how the last line signals the wait condition:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum -y update
+          yum install -y aws-cfn-bootstrap
+          echo 1 > /proc/sys/net/ipv4/ip_forward
+          echo 0 > /proc/sys/net/ipv4/conf/eth0/send_redirects
+          /sbin/iptables -t nat -A POSTROUTING -o eth0 -s 0.0.0.0/0 -j MASQUERADE
+          /sbin/iptables-save > /etc/sysconfig/iptables
+          mkdir -p /etc/sysctl.d/
+          cat << NatConfFileMarker > /etc/sysctl.d/nat.conf
+          net.ipv4.ip_forward = 1
+          net.ipv4.conf.eth0.send_redirects = 0
+          NatConfFileMarker
+          /opt/aws/bin/cfn-signal -e 0 --resource NATInstance --stack ${AWS::StackName} --region ${AWS::Region}
+    # This NATInstance is only complete when you get 1 signal back within 5 minutes'.
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+
+  # A security group for our NAT.  Ingress from the VPC IPs only.  Egress is TCP & UDP only:
+  NATSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: BuildNATInstance
+    DependsOn: infraGatewayAttachment
+    Properties:
+      GroupName: !Sub NATSecurityGroup-${AWS::StackName}
+      GroupDescription: Enable internal access to the NAT device
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '0'
+          ToPort: '1024'
+          CidrIp: !GetAtt Vpc.CidrBlock
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: '0'
+          ToPort: '65535'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: udp
+          FromPort: '0'
+          ToPort: '65535'
+          CidrIp: 0.0.0.0/0
+
+  # Routing Tables
+  RouteTablePub:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'rt', !Ref BaseNameParam, !Ref EnvironmentNameParam, 'pub' ] ]
+
+  RouteTablePrivA:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'rt', !Ref BaseNameParam, !Ref EnvironmentNameParam, 'priv', 'a' ] ]
+  RouteTablePrivB:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'rt', !Ref BaseNameParam, !Ref EnvironmentNameParam, 'priv', 'b' ] ]
+
+  RouteTableOfflineA:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'rt', !Ref BaseNameParam, !Ref EnvironmentNameParam, 'off', 'a' ] ]
+  RouteTableOfflineB:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ 'rt', !Ref BaseNameParam, !Ref EnvironmentNameParam, 'off', 'b' ] ]
+  PubRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref infraInternetGateway
+      RouteTableId: !Ref RouteTablePub
+
+  PubSubnetAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubPubA
+      RouteTableId: !Ref RouteTablePub
+  PubSubnetAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubPubB
+      RouteTableId: !Ref RouteTablePub
+
+  PrivRouteA:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      RouteTableId: !Ref RouteTablePrivA
+      # If we are using a NAT Instance, route traffic through the NAT Instance:
+      InstanceId:   !If [ BuildNATInstance, !Ref NATInstance, !Ref "AWS::NoValue" ]
+      # Otherwise if we are using a NAT Gateway, route traffic through the NAT Gateway:
+      NatGatewayId: !If [ BuildNATGateway, !Ref NatGwA, !Ref "AWS::NoValue" ]
+  PrivRouteB:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      RouteTableId: !Ref RouteTablePrivB
+      # If we are using a NAT Instance, route traffic through the NAT Instance:
+      InstanceId:   !If [ BuildNATInstance, !Ref NATInstance, !Ref "AWS::NoValue" ]
+      # Otherwise if we are using a NAT Gateway, route traffic through the NAT Gateway:
+      NatGatewayId: !If [ BuildNATGateway, !Ref NatGwB, !Ref "AWS::NoValue" ]
+
+
+  PrivSubnetAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubPrivA
+      RouteTableId: !Ref RouteTablePrivA
+  PrivSubnetAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubPrivB
+      RouteTableId: !Ref RouteTablePrivB
+
+  OfflineSubnetAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubOfflineA
+      RouteTableId: !Ref RouteTableOfflineA
+  OfflineSubnetAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubOfflineB
+      RouteTableId: !Ref RouteTableOfflineB
+
+Outputs:
+
+  baseName:
+    Export:
+      Name: !Sub ${AWS::StackName}-baseName-ref
+    Value: !Ref BaseNameParam
+  environment:
+    Export:
+      Name: !Sub ${AWS::StackName}-environment-ref
+    Value: !Ref EnvironmentNameParam
+  Vpc:
+    Export:
+      Name: !Sub ${AWS::StackName}-Vpc-ref
+    Value: !Ref Vpc
+  VpcNetwork:
+    Export:
+      Name: !Sub ${AWS::StackName}-Vpc-Network
+    Value: !Ref VpcNetwork
+  VpcNetmask:
+    Export:
+      Name: !Sub ${AWS::StackName}-Vpc-Netmask
+    Value: !Ref VpcNetmask
+
+  VpcCidr:
+    Export:
+      Name: !Sub ${AWS::StackName}-Vpc-cidr-ref
+    Value: !Ref VpcCidr
+
+  RouteTablePub:
+    Export:
+      Name: !Sub ${AWS::StackName}-RouteTablePub-ref
+    Value: !Ref RouteTablePub
+  RouteTablePrivA:
+    Export:
+      Name: !Sub ${AWS::StackName}-RouteTablePrivA-ref
+    Value: !Ref RouteTablePrivA
+  RouteTablePrivB:
+    Export:
+      Name: !Sub ${AWS::StackName}-RouteTablePrivB-ref
+    Value: !Ref RouteTablePrivB
+
+  routeTableOfflineA:
+    Export:
+      Name: !Sub ${AWS::StackName}-RouteTableOfflineA-ref
+    Value: !Ref RouteTableOfflineA
+  routeTableOfflineB:
+    Export:
+      Name: !Sub ${AWS::StackName}-RouteTableOfflineB-ref
+    Value: !Ref RouteTableOfflineB
+
+  Igw:
+    Export:
+      Name: !Sub ${AWS::StackName}-Igw-ref
+    Value: !Ref infraInternetGateway
+
+  SubPubA:
+    Export:
+      Name: !Sub ${AWS::StackName}-PubSubnetA-ref
+    Value: !Ref SubPubA
+  SubPubCidrA:
+    Export:
+      Name: !Sub ${AWS::StackName}-PubSubnetA-cidr
+    Value: !Ref SubPubACidr
+  SubPubB:
+    Export:
+      Name: !Sub ${AWS::StackName}-PubSubnetB-ref
+    Value: !Ref SubPubB
+  SubPubCidrB:
+    Export:
+      Name: !Sub ${AWS::StackName}-PubSubnetB-cidr
+    Value: !Ref SubPubBCidr
+  SubPrivA:
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivSubnetA-ref
+    Value: !Ref SubPrivA
+  SubPrivCidrA:
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivSubnetA-cidr
+    Value: !Ref SubPrivACidr
+  SubPrivB:
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivSubnetB-ref
+    Value: !Ref SubPrivB
+  SubPrivCidrB:
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivSubnetB-cidr
+    Value: !Ref SubPrivBCidr
+  SubOfflineA:
+    Export:
+      Name: !Sub ${AWS::StackName}-OfflineSubnetA-ref
+    Value: !Ref SubOfflineA
+  SubOfflineB:
+    Export:
+      Name: !Sub ${AWS::StackName}-OfflineSubnetB-ref
+    Value: !Ref SubOfflineB

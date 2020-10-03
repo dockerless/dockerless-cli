@@ -1,0 +1,7 @@
+/.cache/*
+/.git/*
+/bin/*
+/coverage/*
+/docs/*
+/flow-typed/npm/*
+/node_modules/*

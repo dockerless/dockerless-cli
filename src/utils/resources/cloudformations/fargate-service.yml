@@ -1,0 +1,453 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Deploy a service on AWS Fargate, hosted in a private subnet, but accessible via a public load balancer.
+Parameters:
+  VPCStackName:
+    Type: String
+    Description: The name of the parent Dockerless networking stack that was created created. Necessary
+      to locate and reference resources created by that stack.
+  SharedResourcesStackName:
+    Type: String
+    Description: The name of the parent Dockerless shared resources stack that was created created. Necessary
+      to locate and reference resources created by that stack.
+  ClusterStackName:
+    Type: String
+    Description: The name of the parent Dockerless Fargate cluster stack that was created created. Necessary
+      to locate and reference resources created by that stack.
+  ServiceName:
+    Type: String
+    Default: nginx
+    Description: A name for the service
+  ImageUrl:
+    Type: String
+    Default: nginx
+    Description: The url of a docker image that contains the application process that
+      will handle the traffic for this service
+  ContainerPort:
+    Type: Number
+    Default: 80
+    Description: What port number the application inside the docker container is binding to
+  ContainerSize:
+    Type: String
+    Default: 'xxs'
+    AllowedValues:
+      - 'xxs'
+      - 'xs'
+      - 's'
+      - 'm'
+      - 'l'
+      - 'xl'
+      - 'xxl'
+      - 'xxl'
+    Description: Instance size of the container
+  Path:
+    Type: String
+    Default: '*'
+    Description: A path on the public load balancer that this service
+      should be connected to. Use * to send all load balancer
+      traffic to this service.
+  Priority:
+    Type: Number
+    Default: 1
+    Description: The priority for the routing rule added to the load balancer.
+      This only applies if your have multiple services which have been
+      assigned to different paths on the load balancer.
+  DesiredCount:
+    Type: Number
+    Default: 1
+    Description: How many copies of the service task to run
+  Role:
+    Type: String
+    Default: ''
+    Description: (Optional) An IAM role to give the service's containers if the code within needs to
+      access other AWS resources like S3 buckets, DynamoDB tables, etc
+  Protocol:
+    Type: String
+    Default: 'HTTP'
+    AllowedValues:
+      - 'HTTP'
+      - 'TCP'
+      - 'TCP_UDP'
+      - 'TLS'
+      - 'UDP'
+    Description: (Optional) The protocol to use for routing traffic to the targets of the ALB.
+  LoadBalancerType:
+    Type: String
+    Default: 'application'
+    AllowedValues:
+      - 'application'
+      - 'network'
+    Description: (Optional) The type of load balancer to be used
+  NetworkType:
+    Type: String
+    Default: 'public'
+    AllowedValues:
+      - 'public'
+      - 'private'
+    Description: (Optional) Wether this is an internet facing or internal service
+
+Mappings:
+  InstanceSizeMap:
+    xxs:
+      ContainerCpu: 256
+      ContainerMemory: 512
+    xs:
+      ContainerCpu: 256
+      ContainerMemory: 1024
+    s:
+      ContainerCpu: 512
+      ContainerMemory: 1024
+    m:
+      ContainerCpu: 1024
+      ContainerMemory: 2048
+    l:
+      ContainerCpu: 2048
+      ContainerMemory: 4096
+    xl:
+      ContainerCpu: 2048
+      ContainerMemory: 8192
+    xxl:
+      ContainerCpu: 4096
+      ContainerMemory: 16384
+    xxxl:
+      ContainerCpu: 4096
+      ContainerMemory: 30720
+
+Conditions:
+  HasCustomRole: !Not [ !Equals [!Ref 'Role', ''] ]
+  IsPublicService: !Equals [ !Ref 'NetworkType', 'public' ]
+  IsPrivateService: !Equals [ !Ref 'NetworkType', 'private' ]
+
+Resources:
+  # Logs of the ECS task are saved here
+  ContainerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['/', ['dockerless', !Ref 'ServiceName']]
+      RetentionInDays: 30
+
+  # The task definition. This is a simple metadata description of what
+  # container to run, and what resource requirements it has.
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref 'ServiceName'
+      Cpu: !FindInMap [InstanceSizeMap, !Ref 'ContainerSize', ContainerCpu]
+      Memory: !FindInMap [InstanceSizeMap, !Ref 'ContainerSize', ContainerMemory]
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn:
+        Fn::ImportValue:
+          !Join ['-', [!Ref 'SharedResourcesStackName', 'ECSTaskExecutionRole-ref']]
+      TaskRoleArn:
+        Fn::If:
+          - 'HasCustomRole'
+          - !Ref 'Role'
+          - !Ref "AWS::NoValue"
+      ContainerDefinitions:
+        - Name: !Ref 'ServiceName'
+          Cpu: !FindInMap [InstanceSizeMap, !Ref 'ContainerSize', ContainerCpu]
+          Memory: !FindInMap [InstanceSizeMap, !Ref 'ContainerSize', ContainerMemory]
+          Image: !Ref 'ImageUrl'
+          PortMappings:
+            - ContainerPort: !Ref 'ContainerPort'
+          LogConfiguration:
+            LogDriver: 'awslogs'
+            Options:
+              'awslogs-region': !Ref 'AWS::Region'
+              'awslogs-group': !Join ['/', ['dockerless', !Ref 'ServiceName']]
+              'awslogs-stream-prefix': !Join ['/', ['dockerless']]
+
+  DiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Description: Discovery Service created by Dockerless
+      DnsConfig:
+        RoutingPolicy: MULTIVALUE
+        DnsRecords:
+          - TTL: 60
+            Type: A
+          - TTL: 60
+            Type: SRV
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+      Name: !Ref 'ServiceName'
+      NamespaceId:
+        Fn::ImportValue:
+          !Join [ '-', [ !Ref 'ClusterStackName', 'Private-Namespace' ] ]
+
+  # The service. The service is a resource which allows you to run multiple
+  # copies of a type of task, and gather up their logs and metrics, as well
+  # as monitor the number of running tasks and replace any that have crashed
+  PublicService:
+    Type: AWS::ECS::Service
+    Condition: IsPublicService
+    DependsOn: LoadBalancerRule
+    Properties:
+      ServiceName: !Ref 'ServiceName'
+      Cluster:
+        Fn::ImportValue:
+          !Join ['-', [!Ref 'ClusterStackName', 'Cluster-Name']]
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 75
+      DesiredCount: !Ref 'DesiredCount'
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - Fn::ImportValue:
+                !Join [ '-', [ !Ref 'ClusterStackName', 'Fargate-Container-SG' ] ]
+          Subnets:
+            - Fn::ImportValue:
+                !Join ['-', [!Ref 'VPCStackName', 'PrivSubnetA-ref']]
+            - Fn::ImportValue:
+                !Join ['-', [!Ref 'VPCStackName', 'PrivSubnetB-ref']]
+      TaskDefinition: !Ref 'TaskDefinition'
+      LoadBalancers:
+        - ContainerName: !Ref 'ServiceName'
+          ContainerPort: !Ref 'ContainerPort'
+          TargetGroupArn: !Ref 'TargetGroup'
+      ServiceRegistries:
+        - RegistryArn: !GetAtt 'DiscoveryService.Arn'
+          Port: !Ref 'ContainerPort'
+
+  PrivateService:
+    Type: AWS::ECS::Service
+    Condition: IsPrivateService
+    Properties:
+      ServiceName: !Ref 'ServiceName'
+      Cluster:
+        Fn::ImportValue:
+          !Join ['-', [!Ref 'ClusterStackName', 'Cluster-Name']]
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 75
+      DesiredCount: !Ref 'DesiredCount'
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - Fn::ImportValue:
+                !Join [ '-', [ !Ref 'ClusterStackName', 'Fargate-Container-SG' ] ]
+          Subnets:
+            - Fn::ImportValue:
+                !Join ['-', [!Ref 'VPCStackName', 'PrivSubnetA-ref']]
+            - Fn::ImportValue:
+                !Join ['-', [!Ref 'VPCStackName', 'PrivSubnetB-ref']]
+      TaskDefinition: !Ref 'TaskDefinition'
+      ServiceRegistries:
+        - RegistryArn: !GetAtt 'DiscoveryService.Arn'
+          Port: !Ref 'ContainerPort'
+
+  # A target group. This is used for keeping track of all the tasks, and
+  # what IP addresses / port numbers they have. You can query it yourself,
+  # to use the addresses yourself, but most often this target group is just
+  # connected to an application load balancer, or network load balancer, so
+  # it can automatically distribute traffic across all the targets.
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckProtocol: !Ref 'Protocol'
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      TargetType: ip
+      Name: !Ref 'ServiceName'
+      Port: !Ref 'ContainerPort'
+      Protocol: !Ref 'Protocol'
+      UnhealthyThresholdCount: 2
+      VpcId:
+        Fn::ImportValue:
+          !Join ['-', [!Ref 'VPCStackName', 'Vpc-ref']]
+
+  # Create a rule on the load balancer for routing traffic to the target groupåååå
+  LoadBalancerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: IsPublicService
+    Properties:
+      Actions:
+        - TargetGroupArn: !Ref 'TargetGroup'
+          Type: 'forward'
+      Conditions:
+        - Field: path-pattern
+          Values: [!Ref 'Path']
+      ListenerArn: !Ref PublicLoadBalancerListener
+      Priority: !Ref 'Priority'
+
+
+  EcsSecurityGroupIngressFromPublicALB:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: IsPublicService
+    Properties:
+      Description: Ingress from the public ALB
+      GroupId:
+        Fn::ImportValue:
+          !Join [ '-', [ !Ref 'ClusterStackName', 'Fargate-Container-SG' ] ]
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref 'PublicLoadBalancerSG'
+
+  EcsSecurityGroupIngressFromSelf:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from other containers in the same security group
+      GroupId:
+        Fn::ImportValue:
+          !Join [ '-', [ !Ref 'ClusterStackName', 'Fargate-Container-SG' ] ]
+      IpProtocol: -1
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Join [ '-', [ !Ref 'ClusterStackName', 'Fargate-Container-SG' ] ]
+
+
+
+  # Load balancers for getting traffic to containers.
+  # This sample template creates two load balancers:
+  #
+  # - One public load balancer, hosted in public subnets that is accessible
+  #   to the public, and is intended to route traffic to one or more public
+  #   facing services.
+  # - One private load balancer, hosted in private subnets, that only
+  #   accepts traffic from other containers in the Fargate cluster, and is
+  #   intended for private services that should not be accessed directly
+  #   by the public.
+
+  # A public facing load balancer, this is used for accepting traffic from the public
+  # internet and directing it to public facing microservices
+  PublicLoadBalancerSG:
+    Type: AWS::EC2::SecurityGroup
+    Condition: IsPublicService
+    Properties:
+      GroupDescription: Access to the public facing load balancer
+      VpcId:
+        Fn::ImportValue:
+          !Join ['-', [!Ref 'VPCStackName', 'Vpc-ref']]
+      SecurityGroupIngress:
+        # Allow access to ALB from anywhere on the internet
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: -1
+  PublicLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Condition: IsPublicService
+    Properties:
+      Scheme: internet-facing
+      Type: !Ref 'LoadBalancerType'
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '30'
+      Subnets:
+        # The load balancer is placed into the public subnets, so that traffic
+        # from the internet can reach the load balancer directly via the internet gateway
+        - Fn::ImportValue:
+            !Join ['-', [!Ref 'VPCStackName', 'PubSubnetA-ref']]
+        - Fn::ImportValue:
+            !Join ['-', [!Ref 'VPCStackName', 'PubSubnetB-ref']]
+      SecurityGroups: [!Ref 'PublicLoadBalancerSG']
+
+  # A dummy target group is used to setup the ALB to just drop traffic
+  # initially, before any real service target groups have been added.
+  DummyTargetGroupPublic:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: IsPublicService
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckProtocol: !Ref 'Protocol'
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      Name: !Join ['-', [!Ref 'ServiceName', 'drop-1']]
+      Port: !Ref 'ContainerPort'
+      Protocol: !Ref 'Protocol'
+      UnhealthyThresholdCount: 2
+      VpcId:
+        Fn::ImportValue:
+          !Join ['-', [!Ref 'VPCStackName', 'Vpc-ref']]
+  PublicLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: IsPublicService
+    DependsOn:
+      - PublicLoadBalancer
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref 'DummyTargetGroupPublic'
+          Type: 'forward'
+      LoadBalancerArn: !Ref 'PublicLoadBalancer'
+      Port: !Ref 'ContainerPort'
+      Protocol: !Ref 'Protocol'
+
+  # An internal load balancer, this would be used for a service that is not
+  # directly accessible to the public, but instead should only receive traffic
+  # from your other services.
+  # TODO: service discovery with load balancer for private services
+#  PrivateLoadBalancerSG:
+#    Type: AWS::EC2::SecurityGroup
+#    Condition: IsPrivateService
+#    Properties:
+#      GroupDescription: Access to the internal load balancer
+#      VpcId:
+#        Fn::ImportValue:
+#          !Join ['-', [!Ref 'VPCStackName', 'Vpc-ref']]
+#  PrivateLoadBalancerIngressFromECS:
+#    Type: AWS::EC2::SecurityGroupIngress
+#    Condition: IsPrivateService
+#    Properties:
+#      Description: Only accept traffic from a container in the fargate container security group
+#      GroupId: !Ref 'PrivateLoadBalancerSG'
+#      IpProtocol: -1
+#      SourceSecurityGroupId:
+#        Fn::ImportValue:
+#          !Join [ '-', [ !Ref 'ClusterStackName', 'Fargate-Container-SG' ] ]
+#  PrivateLoadBalancer:
+#    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+#    Condition: IsPrivateService
+#    Properties:
+#      Scheme: internal
+#      Type: !Ref 'LoadBalancerType'
+#      LoadBalancerAttributes:
+#        - Key: idle_timeout.timeout_seconds
+#          Value: '30'
+#      Subnets:
+#        # This load balancer is put into the private subnet, so that there is no
+#        # route for the public to even be able to access the private load balancer.
+#        - Fn::ImportValue:
+#            !Join ['-', [!Ref 'VPCStackName', 'PrivSubnetA-ref']]
+#        - Fn::ImportValue:
+#            !Join ['-', [!Ref 'VPCStackName', 'PrivSubnetB-ref']]
+#      SecurityGroups: [!Ref 'PrivateLoadBalancerSG']
+#  # This dummy target group is used to setup the ALB to just drop traffic
+#  # initially, before any real service target groups have been added.
+#  DummyTargetGroupPrivate:
+#    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+#    Condition: IsPrivateService
+#    Properties:
+#      HealthCheckIntervalSeconds: 6
+#      HealthCheckPath: /
+#      HealthCheckProtocol: !Ref 'Protocol'
+#      HealthCheckTimeoutSeconds: 5
+#      HealthyThresholdCount: 2
+#      Name: !Join ['-', [!Ref 'ServiceName', 'drop-2']]
+#      Port: !Ref 'ContainerPort'
+#      Protocol: !Ref 'Protocol'
+#      UnhealthyThresholdCount: 2
+#      VpcId:
+#        Fn::ImportValue:
+#          !Join ['-', [!Ref 'VPCStackName', 'Vpc-ref']]
+#  PrivateLoadBalancerListener:
+#    Type: AWS::ElasticLoadBalancingV2::Listener
+#    Condition: IsPrivateService
+#    DependsOn:
+#      - PrivateLoadBalancer
+#    Properties:
+#      DefaultActions:
+#        - TargetGroupArn: !Ref 'DummyTargetGroupPrivate'
+#          Type: 'forward'
+#      LoadBalancerArn: !Ref 'PrivateLoadBalancer'
+#      Port: !Ref 'ContainerPort'
+#      Protocol: !Ref 'Protocol'
+
+Outputs:
+  DNSName:
+    Export:
+      Name: !Sub ${AWS::StackName}-DNSName
+    Value: !If [IsPublicService, !GetAtt 'PublicLoadBalancer.DNSName', AWS::NoValue]

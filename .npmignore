@@ -1,0 +1,9 @@
+.gitattributes
+.github
+src
+tsconfig.json
+typings
+.idea
+wallaby.js
+docs
+examples

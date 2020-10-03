@@ -1,0 +1,22 @@
+{
+	"parser": "@typescript-eslint/parser",
+	"extends": ["plugin:@typescript-eslint/recommended", "prettier", "prettier/@typescript-eslint", "xo/esnext"],
+	"plugins": ["@typescript-eslint", "prettier"],
+	"rules": {
+		"prettier/prettier": "error",
+		"indent": 0,
+		"semi": 0,
+		"quotes": [2, "single", {"allowTemplateLiterals": true}],
+		"operator-linebreak": 0,
+		"space-before-function-paren": 0,
+		"new-cap": 0 /* For Decoarators */,
+		"no-useless-constructor": 0 /* For Dependency Injection */
+	},
+	"env": {
+		"jest": true,
+		"node": true
+	},
+	"globals": {
+		"window": true
+	}
+}

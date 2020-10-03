@@ -1,0 +1,10 @@
+version: '1'
+serviceName: 'Hello'
+containers:
+  helloworld:
+    containerName: 'Express App'
+    dockerFilePath: 'node-app-public/Dockerfile'
+    size: 'xxs'
+    port: 80
+    portProtocol: 'HTTP'
+    desiredInstances: 1
